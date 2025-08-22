@@ -5,19 +5,12 @@ import serial
 import threading
 import time
 import sqlite3
-import tempfile
 import os
 import platform
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from datetime import datetime
-import tempfile
-import os
-import subprocess
-import win32print
 import win32api
-
 
 
 # ---------- CONFIGURACIÓN ----------
@@ -47,6 +40,40 @@ def guardar_lote(nombre_lote, peso):
     conn.commit()
     conn.close()
 
+def obtener_proveedores_activos():
+    conn = sqlite3.connect("proveedores.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM proveedores WHERE estatus='ACTIVO'")
+    proveedores = cursor.fetchall()
+    conn.close()
+    return [proveedor[1] for proveedor in proveedores]  # Asumimos que [1] es el código del proveedor
+
+def mostrar_info_proveedor(event=None):
+    nombre = nombre_combobox.get()
+
+    if nombre == "...":
+        proveedor_info_label.config(text="⚠️ Selecciona un proveedor válido.", fg="red")
+        imprimir_btn.config(state="disabled")
+        return
+
+    conn = sqlite3.connect("proveedores.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM proveedores WHERE codigo_proveedor = ?", (nombre,))
+    proveedor = cursor.fetchone()
+    conn.close()
+
+    if proveedor:
+        texto = (
+            f"📦 Razon Social: {proveedor[2]}\n"
+            f"🏢 Empresa Compradora: {proveedor[3]}\n"
+            f"✅ Estatus: {proveedor[4]}"
+        )
+        proveedor_info_label.config(text=texto, fg="black")
+        imprimir_btn.config(state="normal")
+    else:
+        proveedor_info_label.config(text="Proveedor no encontrado.", fg="red")
+        imprimir_btn.config(state="disabled")
+
 # ---------- LECTURA DEL PESO ----------
 def leer_peso():
     global peso_actual
@@ -64,58 +91,38 @@ def leer_peso():
     except serial.SerialException:
         actualizar_peso("ERROR")
 
-# ---------- ACTUALIZAR PANTALLA ----------
 def actualizar_peso(peso):
     peso_str = f"{peso:.2f} kg" if isinstance(peso, float) else str(peso)
     peso_label.config(text=peso_str)
 
 def mostrar_mensaje(texto, color="green"):
     mensaje_label.config(text=texto, fg=color)
-    mensaje_label.after(5000, lambda: mensaje_label.config(text=""))  # Oculta mensaje después de 5 segundos
-
-
-from reportlab.lib.units import mm
+    mensaje_label.after(5000, lambda: mensaje_label.config(text=""))
 
 def imprimir_ticket_con_logo():
     if not isinstance(peso_actual, float):
-        mostrar_mensaje("No hay un peso válido revisa conexion de impresora", "red")
+        mostrar_mensaje("No hay un peso válido revisa conexión de impresora", "red")
         return
 
     nombre_lote = nombre_combobox.get().strip()
-    if not nombre_lote:
-        mostrar_mensaje("Nombre de PIQ Invalido.", "red")
+    if not nombre_lote or nombre_lote == "...":
+        mostrar_mensaje("Selecciona un proveedor válido.", "red")
         return
 
-    # Guardar antes de generar/imprimir
     guardar_lote(nombre_lote, peso_actual)
 
     ahora = datetime.now()
     fecha_hora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
 
-        
-    nombre_lote = nombre_combobox.get().strip()
-    if not nombre_lote:
-        mostrar_mensaje("SELECCIONA PIQ VALIDO.", "red")
-        return
-
-    ahora = datetime.now()
-    fecha_hora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Crear carpeta "tickets" si no existe
     os.makedirs("tickets", exist_ok=True)
-
-    # Guardar archivo con nombre fijo
     filename = f"ticket_{nombre_lote}_{ahora.strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_path = os.path.join("tickets", filename)
 
-    # Tamaño de ticket térmico: 58 mm x 180 mm
     ticket_width = 80 * mm
-    ticket_height = 170 * mm
+    ticket_height = 260 * mm
 
     try:
         c = canvas.Canvas(pdf_path, pagesize=(ticket_width, ticket_height))
-
-        # Logo
         logo_width = 40 * mm
         logo_height = 15 * mm
         logo_x = (ticket_width - logo_width) / 2
@@ -126,7 +133,6 @@ def imprimir_ticket_con_logo():
         except Exception as e:
             print("Error al cargar el logo:", e)
 
-        # Texto
         y = logo_y - 20
         c.setFont("Helvetica-Bold", 12)
         c.drawCentredString(ticket_width / 2, y, "TICKET DE PESO INTERNO")
@@ -145,21 +151,14 @@ def imprimir_ticket_con_logo():
         y -= 14
         c.setFont("Helvetica-Bold", 14)
         c.drawString(10, y, f"{peso_actual:.2f} kg")
-        y -= 30
-
-        c.setFont("Helvetica", 9)
-        c.drawCentredString(ticket_width / 2, y, "")
 
         c.showPage()
         c.save()
 
         mostrar_mensaje(f"PDF generado: {pdf_path}")
 
-        # ---------- IMPRESIÓN DIRECTA ----------
         if platform.system() == "Windows":
-            NOMBRE_IMPRESORA_TERMICA = "CUSTOM P3L"  # ← AQUI SE PONE ELK NOMBRE DE LA IMPRESORA
-        
-
+            NOMBRE_IMPRESORA_TERMICA = "CUSTOM P3L"
             try:
                 win32api.ShellExecute(
                     0,
@@ -176,14 +175,13 @@ def imprimir_ticket_con_logo():
     except Exception as e:
         mostrar_mensaje("Error al generar el ticket:", e)
 
-
 # ---------- INTERFAZ ----------
 app = tk.Tk()
 app.title("Sistema de Pesaje de Lotes")
 app.geometry("1000x900")
 app.configure(bg="#ffffff")
 
-# --- Logo ---
+# Logo
 try:
     logo_img = Image.open(LOGO_PATH)
     logo_img = logo_img.resize((200, 100))
@@ -191,30 +189,33 @@ try:
     logo_label = tk.Label(app, image=logo_tk, bg="#ffffff")
     logo_label.pack(pady=10)
 except Exception as e:
-    mostrar_mensaje(
-        "No se pudo cargar el logo:", e)
+    print("No se pudo cargar el logo:", e)
 
-# --- Peso actual ---
+# Peso actual
 peso_label_title = tk.Label(app, text="PESO ACTUAL", font=("Arial", 25, "bold"), bg="#ffffff", fg="#333")
 peso_label_title.pack(pady=(10, 0))
 
 peso_label = tk.Label(app, text="---- kg", font=("Arial", 80, "bold"), fg="#000000", bg="#ffffff")
 peso_label.pack(pady=10)
 
-# --- Campo de nombre del lote ---
+# Campo proveedor
 nombre_frame = tk.Frame(app, bg="#f0f0f0")
 nombre_frame.pack(pady=20)
 
-nombre_label = tk.Label(nombre_frame, text="Captura PIQ:", font=("Arial", 16), bg="#f0f0f0")
+nombre_label = tk.Label(nombre_frame, text="Captura Código de Proveedor:", font=("Arial", 16), bg="#f0f0f0")
 nombre_label.pack(anchor="w")
 
-opciones_piq = ["...","PIQ001-Recuperadora JUAREZ", "PIQ002-Materiales y Repeacion ALD", "PIQ003-SOUDE", "PIQ004-Marco Materiales y Servicios S.A DE C.V"]  # ← Personaliza tus opciones aquí
-nombre_combobox = ttk.Combobox(nombre_frame, font=("Arial", 16), width=50, values=opciones_piq, state="readonly")
+proveedores_activos = obtener_proveedores_activos()
+proveedores_activos.insert(0, "...")
+nombre_combobox = ttk.Combobox(nombre_frame, font=("Arial", 20), width=50, values=proveedores_activos, state="readonly")
 nombre_combobox.pack(pady=5)
-nombre_combobox.set(opciones_piq[0])  # ← Establece una opción por defecto si quieres
+nombre_combobox.set(proveedores_activos[0])
+nombre_combobox.bind("<<ComboboxSelected>>", mostrar_info_proveedor)
 
+proveedor_info_label = tk.Label(nombre_frame, text="", font=("Arial", 26), bg="#f0f0f0", justify="left")
+proveedor_info_label.pack(pady=5, anchor="w")
 
-# --- Botones estilizados ---
+# Botones
 estilo_botones = {
     "font": ("Arial", 16, "bold"),
     "padx": 10,
@@ -231,11 +232,9 @@ mensaje_label.pack(pady=10)
 
 imprimir_btn = tk.Button(
     boton_frame, text="Imprimir y Guardar", bg="#800000", fg="white",
-    command=imprimir_ticket_con_logo, **estilo_botones
+    command=imprimir_ticket_con_logo, state="disabled", **estilo_botones
 )
-
 imprimir_btn.pack(side="left", padx=10)
-
 
 # ---------- INICIO ----------
 init_db()
