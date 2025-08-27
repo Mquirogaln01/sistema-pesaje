@@ -12,11 +12,11 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 import win32api
 
-
 # ---------- CONFIGURACIÓN ----------
 SERIAL_PORT = "COM10"
 BAUD_RATE = 9600
 LOGO_PATH = "LOGO IQ.PNG"
+NOMBRE_IMPRESORA_TERMICA = "CUSTOM P3L"  # Cambiar si tienes otro nombre de impresora
 
 # ---------- BASE DE DATOS ----------
 def init_db():
@@ -31,12 +31,20 @@ def init_db():
         )
     """)
     conn.commit()
+
+    # Verificar si la columna materia_prima ya existe
+    cursor.execute("PRAGMA table_info(lotes)")
+    columnas = [col[1] for col in cursor.fetchall()]
+    if "materia_prima" not in columnas:
+        cursor.execute("ALTER TABLE lotes ADD COLUMN materia_prima TEXT")
+        conn.commit()
+
     conn.close()
 
-def guardar_lote(nombre_lote, peso):
+def guardar_lote(nombre_lote, materia_prima, peso):
     conn = sqlite3.connect("pesajes.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO lotes (nombre_lote, peso) VALUES (?, ?)", (nombre_lote, peso))
+    cursor.execute("INSERT INTO lotes (nombre_lote, materia_prima, peso) VALUES (?, ?, ?)", (nombre_lote, materia_prima, peso))
     conn.commit()
     conn.close()
 
@@ -46,7 +54,15 @@ def obtener_proveedores_activos():
     cursor.execute("SELECT * FROM proveedores WHERE estatus='ACTIVO'")
     proveedores = cursor.fetchall()
     conn.close()
-    return [proveedor[1] for proveedor in proveedores]  # Asumimos que [1] es el código del proveedor
+    return [proveedor[1] for proveedor in proveedores]
+
+def obtener_materias_primas():
+    conn = sqlite3.connect("mp.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT nombre_mp FROM mp")
+    materias_primas = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return materias_primas
 
 def mostrar_info_proveedor(event=None):
     nombre = nombre_combobox.get()
@@ -89,7 +105,7 @@ def leer_peso():
                         continue
                 time.sleep(0.2)
     except serial.SerialException:
-        actualizar_peso("ERROR")
+        actualizar_peso("ERROR BASCULA")
 
 def actualizar_peso(peso):
     peso_str = f"{peso:.2f} kg" if isinstance(peso, float) else str(peso)
@@ -101,7 +117,7 @@ def mostrar_mensaje(texto, color="green"):
 
 def imprimir_ticket_con_logo():
     if not isinstance(peso_actual, float):
-        mostrar_mensaje("No hay un peso válido revisa conexión de impresora", "red")
+        mostrar_mensaje("No hay un peso válido. Revisa conexión.", "red")
         return
 
     nombre_lote = nombre_combobox.get().strip()
@@ -109,20 +125,25 @@ def imprimir_ticket_con_logo():
         mostrar_mensaje("Selecciona un proveedor válido.", "red")
         return
 
-    guardar_lote(nombre_lote, peso_actual)
+    materia_prima = materia_combobox.get().strip()
+    if not materia_prima or materia_prima == "...":
+        mostrar_mensaje("Selecciona un tipo de materia prima.", "red")
+        return
+
+    guardar_lote(nombre_lote, materia_prima, peso_actual)
 
     ahora = datetime.now()
     fecha_hora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
-
     os.makedirs("tickets", exist_ok=True)
     filename = f"ticket_{nombre_lote}_{ahora.strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_path = os.path.join("tickets", filename)
 
-    ticket_width = 80 * mm
-    ticket_height = 260 * mm
+    ticket_width = 100 * mm
+    ticket_height = 280 * mm
 
     try:
         c = canvas.Canvas(pdf_path, pagesize=(ticket_width, ticket_height))
+
         logo_width = 40 * mm
         logo_height = 15 * mm
         logo_x = (ticket_width - logo_width) / 2
@@ -134,23 +155,37 @@ def imprimir_ticket_con_logo():
             print("Error al cargar el logo:", e)
 
         y = logo_y - 20
-        c.setFont("Helvetica-Bold", 12)
-        c.drawCentredString(ticket_width / 2, y, "TICKET DE PESO INTERNO")
-        y -= 20
 
-        c.setFont("Helvetica", 10)
-        c.drawString(10, y, "Fecha y Hora:")
-        y -= 14
-        c.drawString(10, y, fecha_hora_str)
-        y -= 18
-        c.drawString(10, y, "Lote:")
-        y -= 14
-        c.drawString(10, y, nombre_lote)
-        y -= 18
-        c.drawString(10, y, "Peso:")
-        y -= 14
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(10, y, f"{peso_actual:.2f} kg")
+        c.setFont("Helvetica-Bold", 20)
+        c.drawCentredString(ticket_width / 2, y, "TICKET DE PESO INTERNO")
+        y -= 30
+
+        c.setFont("Helvetica", 14)
+        c.drawString(18, y, "Fecha y Hora:")
+        y -= 20
+        c.setFont("Helvetica", 16)
+        c.drawString(14, y, fecha_hora_str)
+        y -= 25
+
+        c.setFont("Helvetica", 14)
+        c.drawString(18, y, "Código de Proveedor:")
+        y -= 20
+        c.setFont("Helvetica", 16)
+        c.drawString(14, y, nombre_lote)
+        y -= 25
+
+        c.setFont("Helvetica", 14)
+        c.drawString(18, y, "Materia Prima:")
+        y -= 20
+        c.setFont("Helvetica", 16)
+        c.drawString(14, y, materia_prima)
+        y -= 25
+
+        c.setFont("Helvetica", 14)
+        c.drawString(18, y, "Peso:")
+        y -= 20
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(20, y, f"{peso_actual:.2f} kg")
 
         c.showPage()
         c.save()
@@ -158,22 +193,14 @@ def imprimir_ticket_con_logo():
         mostrar_mensaje(f"PDF generado: {pdf_path}")
 
         if platform.system() == "Windows":
-            NOMBRE_IMPRESORA_TERMICA = "CUSTOM P3L"
             try:
-                win32api.ShellExecute(
-                    0,
-                    "printto",
-                    pdf_path,
-                    f'"{NOMBRE_IMPRESORA_TERMICA}"',
-                    ".",
-                    0
-                )
+                win32api.ShellExecute(0, "printto", pdf_path, f'"{NOMBRE_IMPRESORA_TERMICA}"', ".", 0)
                 mostrar_mensaje("Ticket enviado a impresión.")
             except Exception as e:
-                mostrar_mensaje("Error al imprimir directamente:", e)
-
+                mostrar_mensaje("Error al imprimir directamente.", "red")
     except Exception as e:
-        mostrar_mensaje("Error al generar el ticket:", e)
+        mostrar_mensaje("Error al generar el ticket.", "red")
+
 
 # ---------- INTERFAZ ----------
 app = tk.Tk()
@@ -202,7 +229,7 @@ peso_label.pack(pady=10)
 nombre_frame = tk.Frame(app, bg="#f0f0f0")
 nombre_frame.pack(pady=20)
 
-nombre_label = tk.Label(nombre_frame, text="Captura Código de Proveedor:", font=("Arial", 16), bg="#f0f0f0")
+nombre_label = tk.Label(nombre_frame, text="Selecciona Código de Proveedor:", font=("Arial", 16), bg="#f0f0f0")
 nombre_label.pack(anchor="w")
 
 proveedores_activos = obtener_proveedores_activos()
@@ -214,6 +241,16 @@ nombre_combobox.bind("<<ComboboxSelected>>", mostrar_info_proveedor)
 
 proveedor_info_label = tk.Label(nombre_frame, text="", font=("Arial", 26), bg="#f0f0f0", justify="left")
 proveedor_info_label.pack(pady=5, anchor="w")
+
+# Materia Prima
+materia_prima_label = tk.Label(nombre_frame, text="Selecciona Tipo de Materia Prima:", font=("Arial", 16), bg="#f0f0f0")
+materia_prima_label.pack(anchor="w")
+
+materias_primas = obtener_materias_primas()
+materias_primas.insert(0, "...")
+materia_combobox = ttk.Combobox(nombre_frame, font=("Arial", 20), width=50, values=materias_primas, state="readonly")
+materia_combobox.pack(pady=5)
+materia_combobox.set(materias_primas[0])
 
 # Botones
 estilo_botones = {

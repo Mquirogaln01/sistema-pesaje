@@ -1,0 +1,30 @@
+import sqlite3
+
+# Conectar a la base de datos
+conn = sqlite3.connect('pesajes.db')
+cursor = conn.cursor()
+
+# Obtener todas las tablas
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+tablas = cursor.fetchall()
+
+if not tablas:
+    print("No hay tablas en la base de datos.")
+else:
+    for tabla in tablas:
+        tabla_nombre = tabla[0]
+        print(f"\n--- Tabla: {tabla_nombre} ---")
+
+        # Obtener las columnas (campos)
+        cursor.execute(f"PRAGMA table_info({tabla_nombre})")
+        columnas = cursor.fetchall()
+
+        if columnas:
+            print("Campos:")
+            for columna in columnas:
+                # columna[1] es el nombre del campo
+                print(f" - {columna[1]} (tipo: {columna[2]})")
+        else:
+            print("No se encontraron columnas.")
+
+conn.close()

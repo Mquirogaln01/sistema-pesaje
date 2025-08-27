@@ -1,0 +1,59 @@
+import sqlite3
+
+def insertar_mp(mp):
+    try:
+        # Conectar a la base de datos
+        conn = sqlite3.connect('mp.db')
+        cursor = conn.cursor()
+
+        # Crear la tabla si no existe (opcional pero útil)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mp (
+                nombre_mp TEXT NOT NULL,
+                codigo_mp TEXT NOT NULL UNIQUE
+            )
+        ''')
+
+        # Insertar múltiples registros
+        cursor.executemany("""
+            INSERT INTO mp (nombre_mp, codigo_mp)
+            VALUES (?, ?)
+        """, mp)
+
+        # Confirmar cambios
+        conn.commit()
+        print(f"{len(mp)} materias primas insertadas correctamente.")
+        
+    except sqlite3.Error as e:
+        print(f"Error al insertar la lista de materia prima: {e}")
+    finally:
+        conn.close()
+
+
+# Datos de materia prima a insertar
+mp = [
+    ("REBABA", "RB"),
+    ("ESCORIA", "ES"),
+    ("ESCORIA CALCINADA", "ESC"),
+    ("BRIQUETA", "BR"),
+    ("FLASH", "FL"),
+    ("MACIZO SUCIO", "MS"),
+    ("MACIZO LIMPIO", "ML"),
+    ("BLANDO", "BL"),
+    ("RETORNO SUCIO", "RS"),
+    ("RETORNO LIMPIO", "RL"),
+    ("LINGOTE", "LI"),
+    ("GOTA", "GT"),
+    ("RIN", "RI"),
+    ("CABLE", "CA"),
+    ("VENA", "VE"),
+    ("SILICIO", "SI"),
+    ("COBRE", "CU"),
+    ("MAGNESIO", "MG"),
+    ("PERFIL", "PF"),
+    ("ELIMINADOR DE MG", "EMG"),
+    ("FIERRO", "FE")
+]
+
+# Ejecutar la función
+insertar_mp(mp)
