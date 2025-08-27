@@ -11,6 +11,8 @@ from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 import win32api
+import queue
+
 
 # ---------- CONFIGURACIÓN ----------
 SERIAL_PORT = "COM10"
@@ -27,12 +29,12 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre_lote TEXT NOT NULL,
             peso REAL NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            usuario TEXT NOT NULL
         )
     """)
     conn.commit()
 
-    # Verificar si la columna materia_prima ya existe
     cursor.execute("PRAGMA table_info(lotes)")
     columnas = [col[1] for col in cursor.fetchall()]
     if "materia_prima" not in columnas:
@@ -41,12 +43,20 @@ def init_db():
 
     conn.close()
 
-def guardar_lote(nombre_lote, materia_prima, peso):
+def guardar_lote(nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador):
     conn = sqlite3.connect("pesajes.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO lotes (nombre_lote, materia_prima, peso) VALUES (?, ?, ?)", (nombre_lote, materia_prima, peso))
+    
+    # Guardar el lote con el nombre del validador y el pesador
+    cursor.execute("""
+        INSERT INTO lotes (nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador)
+        VALUES (?, ?, ?, ?, ?)
+    """, (nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador))
+    
     conn.commit()
     conn.close()
+
+
 
 def obtener_proveedores_activos():
     conn = sqlite3.connect("proveedores.db")
@@ -64,33 +74,17 @@ def obtener_materias_primas():
     conn.close()
     return materias_primas
 
-def mostrar_info_proveedor(event=None):
-    nombre = nombre_combobox.get()
-
-    if nombre == "...":
-        proveedor_info_label.config(text="⚠️ Selecciona un proveedor válido.", fg="red")
-        imprimir_btn.config(state="disabled")
-        return
-
-    conn = sqlite3.connect("proveedores.db")
+def verificar_usuario_activo(numero_tarjeta):
+    conn = sqlite3.connect("usuarios_activos.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM proveedores WHERE codigo_proveedor = ?", (nombre,))
-    proveedor = cursor.fetchone()
+    cursor.execute("SELECT * FROM usuarios WHERE tarjeta = ? AND status = 'activo'", (numero_tarjeta,))
+    usuario = cursor.fetchone()
     conn.close()
-
-    if proveedor:
-        texto = (
-            f"📦 Razon Social: {proveedor[2]}\n"
-            f"🏢 Empresa Compradora: {proveedor[3]}\n"
-            f"✅ Estatus: {proveedor[4]}"
-        )
-        proveedor_info_label.config(text=texto, fg="black")
-        imprimir_btn.config(state="normal")
-    else:
-        proveedor_info_label.config(text="Proveedor no encontrado.", fg="red")
-        imprimir_btn.config(state="disabled")
+    return usuario
 
 # ---------- LECTURA DEL PESO ----------
+
+
 def leer_peso():
     global peso_actual
     try:
@@ -115,7 +109,7 @@ def mostrar_mensaje(texto, color="green"):
     mensaje_label.config(text=texto, fg=color)
     mensaje_label.after(5000, lambda: mensaje_label.config(text=""))
 
-def imprimir_ticket_con_logo():
+def imprimir_ticket_con_logo(usuario):
     if not isinstance(peso_actual, float):
         mostrar_mensaje("No hay un peso válido. Revisa conexión.", "red")
         return
@@ -130,7 +124,8 @@ def imprimir_ticket_con_logo():
         mostrar_mensaje("Selecciona un tipo de materia prima.", "red")
         return
 
-    guardar_lote(nombre_lote, materia_prima, peso_actual)
+    # Ahora pasamos tanto el validador como el pesador, que en este caso son el mismo usuario
+    guardar_lote(nombre_lote, materia_prima, peso_actual, usuario[1], usuario[1])  # Usuario validador y pesador
 
     ahora = datetime.now()
     fecha_hora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
@@ -139,7 +134,7 @@ def imprimir_ticket_con_logo():
     pdf_path = os.path.join("tickets", filename)
 
     ticket_width = 100 * mm
-    ticket_height = 280 * mm
+    ticket_height = 230 * mm
 
     try:
         c = canvas.Canvas(pdf_path, pagesize=(ticket_width, ticket_height))
@@ -187,6 +182,9 @@ def imprimir_ticket_con_logo():
         c.setFont("Helvetica-Bold", 18)
         c.drawString(20, y, f"{peso_actual:.2f} kg")
 
+        # Nombre del validador y del pesador
+        c.setFont("Helvetica", 14)
+        c.drawString(18, y - 45, f"Pesador: {usuario[1]}")  # El pesador
         c.showPage()
         c.save()
 
@@ -194,29 +192,82 @@ def imprimir_ticket_con_logo():
 
         if platform.system() == "Windows":
             try:
-                win32api.ShellExecute(0, "printto", pdf_path, f'"{NOMBRE_IMPRESORA_TERMICA}"', ".", 0)
+                win32api.ShellExecute(0, "print", pdf_path, f'"{NOMBRE_IMPRESORA_TERMICA}"', ".", 0)
                 mostrar_mensaje("Ticket enviado a impresión.")
             except Exception as e:
                 mostrar_mensaje("Error al imprimir directamente.", "red")
     except Exception as e:
         mostrar_mensaje("Error al generar el ticket.", "red")
 
-
 # ---------- INTERFAZ ----------
+
+def mostrar_info_proveedor(event=None):
+    nombre = nombre_combobox.get()
+    
+    if nombre == "...":
+        proveedor_info_label.config(text="⚠️ Selecciona un proveedor válido.", fg="red")
+        validar_tarjeta_btn.config(state="disabled")
+        return
+
+    conn = sqlite3.connect("proveedores.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM proveedores WHERE codigo_proveedor = ?", (nombre,))
+    proveedor = cursor.fetchone()
+    conn.close()
+
+    if proveedor:
+        texto = (
+            f"📦 Razon Social: {proveedor[2]}\n"
+            f"🏢 Empresa Compradora: {proveedor[3]}\n"
+            f"✅ Estatus: {proveedor[4]}"
+        )
+        proveedor_info_label.config(text=texto, fg="black")
+        validar_tarjeta_btn.config(state="normal")
+    else:
+        proveedor_info_label.config(text="Proveedor no encontrado.", fg="red")
+        validar_tarjeta_btn.config(state="disabled")
+
+def abrir_validacion_tarjeta():
+    # Abrir ventana de validación de tarjeta
+    tarjeta_ventana = tk.Toplevel(app)
+    tarjeta_ventana.title("Validar Tarjeta")
+    tarjeta_ventana.geometry("400x200")
+    
+    tarjeta_label = tk.Label(tarjeta_ventana, text="Ingrese número de tarjeta:", font=("Arial", 16))
+    tarjeta_label.pack(pady=10)
+    
+    tarjeta_entry = tk.Entry(tarjeta_ventana, font=("Arial", 20), width=25)
+    tarjeta_entry.pack(pady=10)
+    
+    # Colocar el cursor en el campo de la tarjeta para leer automáticamente
+    tarjeta_entry.focus_set()
+
+    # Detectar y validar tarjeta automáticamente al presionar Enter
+    def on_enter(event):
+        numero_tarjeta = tarjeta_entry.get()
+        usuario = verificar_usuario_activo(numero_tarjeta)
+        
+        if usuario:
+            mostrar_mensaje(f"Usuario: {usuario[1]} validado.", "green")
+            # Llamar a la función de impresión con el usuario validado
+            imprimir_ticket_con_logo(usuario)
+            tarjeta_ventana.destroy()  # Cerrar ventana de validación de tarjeta
+        else:
+            mostrar_mensaje("Usuario no válido o inactivo.", "red")
+
+    tarjeta_entry.bind("<Return>", on_enter)
+
+# ---------- INICIO ----------
+init_db()
+peso_actual = None
+lectura_thread = threading.Thread(target=leer_peso, daemon=True)
+lectura_thread.start()
+
+# Interfaz de usuario
 app = tk.Tk()
 app.title("Sistema de Pesaje de Lotes")
 app.geometry("1000x900")
 app.configure(bg="#ffffff")
-
-# Logo
-try:
-    logo_img = Image.open(LOGO_PATH)
-    logo_img = logo_img.resize((200, 100))
-    logo_tk = ImageTk.PhotoImage(logo_img)
-    logo_label = tk.Label(app, image=logo_tk, bg="#ffffff")
-    logo_label.pack(pady=10)
-except Exception as e:
-    print("No se pudo cargar el logo:", e)
 
 # Peso actual
 peso_label_title = tk.Label(app, text="PESO ACTUAL", font=("Arial", 25, "bold"), bg="#ffffff", fg="#333")
@@ -252,31 +303,12 @@ materia_combobox = ttk.Combobox(nombre_frame, font=("Arial", 20), width=50, valu
 materia_combobox.pack(pady=5)
 materia_combobox.set(materias_primas[0])
 
-# Botones
-estilo_botones = {
-    "font": ("Arial", 16, "bold"),
-    "padx": 10,
-    "pady": 5,
-    "width": 15,
-    "bd": 0
-}
-
-boton_frame = tk.Frame(app, bg="#f0f0f0")
-boton_frame.pack(pady=20)
+# Botón de validación
+validar_tarjeta_btn = tk.Button(app, text="Imprimir con Tarjeta", bg="#800000", fg="white", 
+                                command=abrir_validacion_tarjeta, font=("Arial", 16, "bold"))
+validar_tarjeta_btn.pack(pady=20)
 
 mensaje_label = tk.Label(app, text="", font=("Arial", 14), fg="green", bg="#ffffff")
 mensaje_label.pack(pady=10)
-
-imprimir_btn = tk.Button(
-    boton_frame, text="Imprimir y Guardar", bg="#800000", fg="white",
-    command=imprimir_ticket_con_logo, state="disabled", **estilo_botones
-)
-imprimir_btn.pack(side="left", padx=10)
-
-# ---------- INICIO ----------
-init_db()
-peso_actual = None
-lectura_thread = threading.Thread(target=leer_peso, daemon=True)
-lectura_thread.start()
 
 app.mainloop()
