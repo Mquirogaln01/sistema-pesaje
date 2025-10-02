@@ -1,0 +1,28 @@
+import sqlite3
+
+def ver_datos():
+    try:
+        # Conectar a la base de datos
+        conn = sqlite3.connect('proveedores.db')
+        cursor = conn.cursor()
+
+        # Realizar la consulta para obtener todos los registros
+        cursor.execute("SELECT * FROM proveedores")
+
+        # Obtener todos los resultados
+        registros = cursor.fetchall()
+
+        # Mostrar los resultados
+        if registros:
+            for registro in registros:
+                print(f"{registro[0]},{registro[1]},{registro[2]},{registro[3]},{registro[4]}")
+        else:
+            print("No hay datos en la tabla.")
+
+    except sqlite3.Error as e:
+        print(f"Error al consultar los datos: {e}")
+    finally:
+        conn.close()
+
+# Ejecutar la función para ver los datos
+ver_datos()

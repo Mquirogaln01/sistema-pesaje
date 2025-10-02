@@ -1,0 +1,25 @@
+import sqlite3
+
+def actualizar_datos_a_mayusculas():
+    try:
+        # Conexión a la base de datos
+        conn = sqlite3.connect("pesado.db")
+        cursor = conn.cursor()
+
+        # Actualizar todos los valores de la columna 'pesado_en' a mayúsculas
+        cursor.execute("UPDATE pesado SET pesado_en = UPPER(pesado_en)")
+
+        # Confirmar cambios
+        conn.commit()
+
+        print("Los datos han sido actualizados a mayúsculas.")
+    
+    except sqlite3.Error as e:
+        print(f"Error al actualizar los datos: {e}")
+    
+    finally:
+        # Cerrar la conexión
+        conn.close()
+
+# Llamar a la función para actualizar los datos
+actualizar_datos_a_mayusculas()
