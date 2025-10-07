@@ -1,0 +1,27 @@
+def init_db():
+    conn = sqlite3.connect("pesajes.db")
+    cursor = conn.cursor()
+
+    # Crear tabla si no existe con la nueva estructura
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS lotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre_lote TEXT NOT NULL,
+            peso REAL NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            materia_prima TEXT,
+            usuario_validador TEXT,
+            usuario_pesador TEXT,
+            tipo_movimiento TEXT
+        )
+    """)
+    conn.commit()
+
+    # Verificar si la columna tipo_movimiento ya existe
+    cursor.execute("PRAGMA table_info(lotes)")
+    columnas = [col[1] for col in cursor.fetchall()]
+    if "tipo_movimiento" not in columnas:
+        cursor.execute("ALTER TABLE lotes ADD COLUMN tipo_movimiento TEXT")
+        conn.commit()
+
+    conn.close()

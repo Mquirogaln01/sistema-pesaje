@@ -13,12 +13,23 @@ from reportlab.lib.units import mm
 import win32api
 import queue
 
+# ---------- cola global ----------
+peso_queue = queue.Queue()
+
+# ---------- configuración de estabilidad ----------
+peso_anterior = None
+UMBRAL_ESTABLE = 0.05  # tolerancia de cambio para considerar estable
+lecturas_estables = 0
+LECTURAS_PARA_ESTABLE = 5  # cuántas lecturas consecutivas dentro del umbral
 
 # ---------- CONFIGURACIÓN ----------
 SERIAL_PORT = "COM10"
 BAUD_RATE = 9600
 LOGO_PATH = "LOGO IQ.PNG"
 NOMBRE_IMPRESORA_TERMICA = "CUSTOM P3L"  # Cambiar si tienes otro nombre de impresora
+
+# ---------- variables de ventana de tarjeta ----------
+tarjeta_ventana = None
 
 # ---------- BASE DE DATOS ----------
 def init_db():
@@ -46,25 +57,20 @@ def init_db():
 def guardar_lote(nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador):
     conn = sqlite3.connect("pesajes.db")
     cursor = conn.cursor()
-    
-    # Guardar el lote con el nombre del validador y el pesador
     cursor.execute("""
         INSERT INTO lotes (nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador)
         VALUES (?, ?, ?, ?, ?)
     """, (nombre_lote, materia_prima, peso, usuario_validador, usuario_pesador))
-    
     conn.commit()
     conn.close()
-
-
 
 def obtener_proveedores_activos():
     conn = sqlite3.connect("proveedores.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM proveedores WHERE estatus='ACTIVO'")
+    cursor.execute("SELECT * FROM proveedores WHERE estatus = 'ACTIVO'")
     proveedores = cursor.fetchall()
     conn.close()
-    return [proveedor[1] for proveedor in proveedores]
+    return [proveedor[0] for proveedor in proveedores]
 
 def obtener_materias_primas():
     conn = sqlite3.connect("mp.db")
@@ -91,31 +97,61 @@ def verificar_usuario_activo(numero_tarjeta):
     return usuario
 
 # ---------- LECTURA DEL PESO ----------
-
-
 def leer_peso():
-    global peso_actual
     try:
-        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1) as ser:  # Timeout más corto
+        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1) as ser:
             while True:
-                if ser.in_waiting > 0:  # Si hay datos disponibles
+                if ser.in_waiting > 0:
                     line = ser.readline().decode('utf-8').strip()
                     if line:
                         try:
-                            peso_actual = float(line)
-                            actualizar_peso(peso_actual)
+                            peso = float(line)
+                            peso_queue.put(peso)
                         except ValueError:
-                            continue  # Si no se puede convertir, seguir leyendo
-                time.sleep(0.1)  # Pequeña pausa entre lecturas para evitar sobrecargar el hilo
+                            pass
+                time.sleep(0.05)
     except serial.SerialException:
-        actualizar_peso("ERROR BASCULA")
+        peso_queue.put("ERROR BASCULA")
 
+def procesar_peso_desde_cola():
+    global peso_actual, peso_anterior, lecturas_estables
+
+    try:
+        while True:
+            peso = peso_queue.get_nowait()
+            peso_actual = peso
+            peso_str = f"{peso:.2f} kg" if isinstance(peso, float) else str(peso)
+            if peso_label.cget("text") != peso_str:
+                peso_label.config(text=peso_str)
+
+            # Lógica de estabilidad
+            if isinstance(peso, float) and peso_anterior is not None:
+                diferencia = abs(peso - peso_anterior)
+                if diferencia <= UMBRAL_ESTABLE:
+                    lecturas_estables += 1
+                else:
+                    lecturas_estables = 0
+            else:
+                lecturas_estables = 0
+
+            # Cambiar color del indicador
+            if lecturas_estables >= LECTURAS_PARA_ESTABLE:
+                indicador_frame.config(bg="green")
+            else:
+                indicador_frame.config(bg="red")
+
+            if isinstance(peso, float):
+                peso_anterior = peso
+
+    except queue.Empty:
+        pass
+
+    app.after(100, procesar_peso_desde_cola)
 
 def actualizar_peso(peso):
     peso_str = f"{peso:.2f} kg" if isinstance(peso, float) else str(peso)
-    if peso_label.cget("text") != peso_str:  # Solo actualizar si el valor es diferente
+    if peso_label.cget("text") != peso_str:
         peso_label.config(text=peso_str)
-
 
 def mostrar_mensaje(texto, color="green"):
     mensaje_label.config(text=texto, fg=color)
@@ -135,14 +171,13 @@ def imprimir_ticket_con_logo(usuario):
     if not materia_prima or materia_prima == "...":
         mostrar_mensaje("Selecciona un tipo de materia prima.", "red")
         return
-    
+
     pesado_en = pesado_en_combobox.get().strip()
     if not pesado_en or pesado_en == "...":
-        mostrar_mensaje("Selecciona un opcion valida.", "red")
+        mostrar_mensaje("Selecciona una opción válida.", "red")
         return
 
-    # Ahora pasamos tanto el validador como el pesador, que en este caso son el mismo usuario
-    guardar_lote(nombre_lote, materia_prima, peso_actual, usuario[1], usuario[1])  # Usuario validador y pesador
+    guardar_lote(nombre_lote, materia_prima, peso_actual, usuario[1], usuario[1])
 
     ahora = datetime.now()
     fecha_hora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
@@ -206,11 +241,8 @@ def imprimir_ticket_con_logo(usuario):
         c.setFont("Helvetica-Bold", 20)
         c.drawString(20, y, f"{peso_actual:.2f} kg")
 
-        
-
-        # Nombre del validador y del pesador
         c.setFont("Helvetica", 14)
-        c.drawString(18, y - 45, f"Pesador: {usuario[1]}")  # El pesador
+        c.drawString(18, y - 45, f"Pesador: {usuario[1]}")
         c.showPage()
         c.save()
 
@@ -222,14 +254,12 @@ def imprimir_ticket_con_logo(usuario):
                 mostrar_mensaje("⚠️ Ticket enviado a impresión.", "green")
             except Exception as e:
                 mostrar_mensaje("⚠️ Error al imprimir directamente.", "red")
+
     except Exception as e:
         mostrar_mensaje("⚠️ Error al generar el ticket.", "red")
 
-# ---------- INTERFAZ ----------
-
 def mostrar_info_proveedor(event=None):
     nombre = nombre_combobox.get()
-    
     if nombre == "...":
         proveedor_info_label.config(text="⚠️ Selecciona un proveedor válido.", fg="red")
         validar_tarjeta_btn.config(state="disabled")
@@ -243,9 +273,9 @@ def mostrar_info_proveedor(event=None):
 
     if proveedor:
         texto = (
-            f"📦 Razon Social: {proveedor[2]}\n"
-            f"🏢 Empresa Compradora: {proveedor[3]}\n"
-            f"✅ Estatus: {proveedor[4]}"
+            f"📦 Razón Social: {proveedor[1]}\n"
+            f"🏢 Empresa Compradora: {proveedor[2]}\n"
+            f"✅ Estatus: {proveedor[3]}"
         )
         proveedor_info_label.config(text=texto, fg="black")
         validar_tarjeta_btn.config(state="normal")
@@ -254,30 +284,50 @@ def mostrar_info_proveedor(event=None):
         validar_tarjeta_btn.config(state="disabled")
 
 def abrir_validacion_tarjeta():
-    # Abrir ventana de validación de tarjeta
+    global tarjeta_ventana
+
+    # Si la ventana ya existe y está abierta, solo muestro un mensaje
+    if tarjeta_ventana is not None and tk.Toplevel.winfo_exists(tarjeta_ventana):
+        mostrar_mensaje("La ventana ya está abierta.", "red")
+        return
+
+    # Crear la ventana de validación
     tarjeta_ventana = tk.Toplevel(app)
     tarjeta_ventana.title("Validar Tarjeta")
     tarjeta_ventana.geometry("400x200")
-    
-    tarjeta_label = tk.Label(tarjeta_ventana, text=" ⚠️ ⚠️Ingrese número de tarjeta: ⚠️ ⚠️", font=("Arial", 16))
+    tarjeta_ventana.configure(bg="#f0f0f0")
+
+    # Si se cierra por la X, limpiar la referencia
+    def on_close():
+        global tarjeta_ventana
+        tarjeta_ventana.destroy()
+        tarjeta_ventana = None
+
+    tarjeta_ventana.protocol("WM_DELETE_WINDOW", on_close)
+
+    tarjeta_label = tk.Label(
+        tarjeta_ventana,
+        text=" ⚠️ ⚠️ ⚠️Ingrese número de tarjeta: ⚠️ ⚠️ ⚠️ ",
+        font=("Arial", 16),
+        bg="#f0f0f0"
+    )
     tarjeta_label.pack(pady=10)
-    
-    tarjeta_entry = tk.Entry(tarjeta_ventana, font=("Arial", 20), width=25)
+
+    tarjeta_entry = tk.Entry(
+        tarjeta_ventana,
+        font=("Arial", 20),
+        width=25
+    )
     tarjeta_entry.pack(pady=10)
-    
-    # Colocar el cursor en el campo de la tarjeta para leer automáticamente
     tarjeta_entry.focus_set()
 
-    # Detectar y validar tarjeta automáticamente al presionar Enter
     def on_enter(event):
         numero_tarjeta = tarjeta_entry.get()
         usuario = verificar_usuario_activo(numero_tarjeta)
-        
         if usuario:
             mostrar_mensaje(f"Usuario: {usuario[1]} validado.", "green")
-            # Llamar a la función de impresión con el usuario validado
             imprimir_ticket_con_logo(usuario)
-            tarjeta_ventana.destroy()  # Cerrar ventana de validación de tarjeta
+            on_close()
         else:
             mostrar_mensaje("⚠️ Usuario no válido o inactivo.", "red")
 
@@ -289,13 +339,16 @@ peso_actual = None
 lectura_thread = threading.Thread(target=leer_peso, daemon=True)
 lectura_thread.start()
 
-# Interfaz de usuario
 app = tk.Tk()
 app.title("Sistema de Pesaje de Lotes")
 app.geometry("1000x900")
 app.configure(bg="#ffffff")
 
-# Peso actual
+# Indicador de estabilidad (cuadrito rojo/verde)
+indicador_frame = tk.Frame(app, width=30, height=30, bg="red", bd=2, relief="sunken")
+indicador_frame.pack(pady=5)
+
+# Título peso
 peso_label_title = tk.Label(app, text="PESO ACTUAL", font=("Arial", 25, "bold"), bg="#ffffff", fg="#333")
 peso_label_title.pack(pady=(10, 0))
 
@@ -329,27 +382,23 @@ materia_combobox = ttk.Combobox(nombre_frame, font=("Arial", 20), width=50, valu
 materia_combobox.pack(pady=5)
 materia_combobox.set(materias_primas[0])
 
-
-
-# Pesado en 
+# Pesado en
 pesado_en_label = tk.Label(nombre_frame, text="Selecciona donde se esta pesando:", font=("Arial", 16), bg="#f0f0f0")
 pesado_en_label.pack(anchor="w")
 
-# Este cambio es importante para que `pesado_en_combobox` sea inicializado correctamente
-pesado_en = obtener_pesado_en()  # Obtener las opciones de pesado
-pesado_en.insert(0, "...")  # Insertar valor inicial
+pesado_en = obtener_pesado_en()
+pesado_en.insert(0, "...")
 pesado_en_combobox = ttk.Combobox(nombre_frame, font=("Arial", 20), width=50, values=pesado_en, state="readonly")
 pesado_en_combobox.pack(pady=5)
-pesado_en_combobox.set(pesado_en[0])  # Establecer el valor por defecto
-
-
+pesado_en_combobox.set(pesado_en[0])
 
 # Botón de validación
-validar_tarjeta_btn = tk.Button(app, text="Imprimir con Tarjeta", bg="#800000", fg="white", 
+validar_tarjeta_btn = tk.Button(app, text="Imprimir con Tarjeta", bg="#800000", fg="white",
                                 command=abrir_validacion_tarjeta, font=("Arial", 16, "bold"))
 validar_tarjeta_btn.pack(pady=20)
 
 mensaje_label = tk.Label(app, text="", font=("Arial", 14), fg="green", bg="#ffffff")
 mensaje_label.pack(pady=10)
 
+procesar_peso_desde_cola()
 app.mainloop()

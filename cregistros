@@ -3,11 +3,11 @@ import sqlite3
 def ver_datos():
     try:
         # Conectar a la base de datos
-        conn = sqlite3.connect('proveedores.db')
+        conn = sqlite3.connect('pesajes.db')
         cursor = conn.cursor()
 
         # Realizar la consulta para obtener todos los registros
-        cursor.execute("SELECT * FROM proveedores")
+        cursor.execute("SELECT * FROM lotes")
 
         # Obtener todos los resultados
         registros = cursor.fetchall()
@@ -15,7 +15,7 @@ def ver_datos():
         # Mostrar los resultados
         if registros:
             for registro in registros:
-                print(f"{registro[0]},{registro[1]},{registro[2]},{registro[3]},{registro[4]}")
+                print(f"{registro[0]},{registro[1]},{registro[2]},{registro[3]},{registro[4]},{registro[5]},{registro[5]}")
         else:
             print("No hay datos en la tabla.")
 

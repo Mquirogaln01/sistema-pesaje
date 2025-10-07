@@ -1,11 +1,11 @@
 import sqlite3
 
 def ver_estructura_lotes():
-    conn = sqlite3.connect("proveedores.db")
+    conn = sqlite3.connect("pesajes.db")
     cursor = conn.cursor()
     
     # Verifica la estructura de la tabla 
-    cursor.execute("PRAGMA table_info(proveedores)")
+    cursor.execute("PRAGMA table_info(lotes)")
     columnas = cursor.fetchall()
     for col in columnas:
         print(col)
