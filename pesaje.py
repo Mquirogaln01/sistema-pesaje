@@ -62,7 +62,7 @@ def fetch_proveedores_activos():
     try:
         conn = sqlite3.connect(PROV_DB)
         c = conn.cursor()
-        c.execute("SELECT codigo_proveedor FROM proveedores WHERE estatus = 'ACTIVO'")
+        c.execute("SELECT codigo_proveedor FROM proveedores")
         rows = [r[0] for r in c.fetchall()]
         conn.close()
         return rows
@@ -101,6 +101,18 @@ def verificar_usuario_activo(numero_tarjeta):
         return u
     except Exception:
         return None
+
+# ----------------- NUEVO: obtener usuarios activos (por nombre) -----------------
+def obtener_usuarios_activos():
+    try:
+        conn = sqlite3.connect(USUARIOS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT nombre FROM usuarios WHERE status = 'activo'")
+        usuarios = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return usuarios
+    except Exception:
+        return []
 
 # ----------------- PESO (simulado para pruebas) -----------------
 def leer_peso_simulado():
@@ -164,7 +176,6 @@ def mostrar_info_proveedor(event=None):
 
 # ----------------- VENTANA TARA -----------------
 def abrir_ventana_tara():
-    # validaciones previas
     if nombre_combobox.get() in (None, "...") or materia_combobox.get() in (None, "...") or pesado_en_combobox.get() in (None, "..."):
         messagebox.showerror("Error", "Selecciona proveedor, materia prima y donde se está pesando antes.")
         return
@@ -192,7 +203,6 @@ def abrir_ventana_tara():
             messagebox.showerror("Error", "Peso neto negativo. Revisa tara.")
             return
 
-        # Guardar registro TEMP (usuario TEMP hasta validar tarjeta)
         nombre_lote = nombre_combobox.get().strip()
         materia = materia_combobox.get().strip()
         tipo_mov = tipo_mov_var.get().strip()
@@ -214,14 +224,13 @@ def abrir_ventana_tara():
             return
 
         ventana.destroy()
-        abrir_validacion_tarjeta(lote_id)  # sigue flujo: validar tarjeta -> imprimir
+        abrir_validacion_tarjeta(lote_id)
 
     tk.Button(ventana, text="Confirmar", font=("Arial", 14), bg="#007a00", fg="white", command=on_confirm).pack(pady=14)
 
 # ----------------- VENTANA TARJETA -----------------
 def abrir_validacion_tarjeta(lote_id):
     global tarjeta_ventana
-    # evita abrir dos ventanas
     if tarjeta_ventana is not None and tk.Toplevel.winfo_exists(tarjeta_ventana):
         messagebox.showwarning("Advertencia", "Ya hay una ventana de tarjeta abierta.")
         return
@@ -236,12 +245,11 @@ def abrir_validacion_tarjeta(lote_id):
     entrada.pack(pady=8)
     entrada.focus_set()
 
-    processed = {"done": False}  # bandera para evitar doble ejecución
+    processed = {"done": False}
 
     def procesar_tarjeta(event=None):
         if processed["done"]:
             return
-        # mark as processed immediately to avoid re-entrancy
         processed["done"] = True
 
         numero = entrada.get().strip()
@@ -256,7 +264,6 @@ def abrir_validacion_tarjeta(lote_id):
             tarjeta_ventana.destroy()
             return
 
-        # Actualizar registro en DB con usuario real (una sola vez)
         try:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
@@ -268,7 +275,6 @@ def abrir_validacion_tarjeta(lote_id):
             tarjeta_ventana.destroy()
             return
 
-        # Leer registro desde DB (asegurarnos de datos definitivos)
         try:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
@@ -285,42 +291,27 @@ def abrir_validacion_tarjeta(lote_id):
             tarjeta_ventana.destroy()
             return
 
-        # extraer datos para el PDF
-        (_, nombre_lote, materia_prima, bruto, tara, neto, tipo_mov, pesado_en, usuario_validador, usuario_pesador, timestamp) = fila
-
-        # cerrar ventana de tarjeta antes de imprimir
         tarjeta_ventana.destroy()
-
-        # imprimir solo UNA vez
         generar_e_imprimir_pdf_desde_fila(fila)
-
-        # limpiar formulario al final
         limpiar_formulario()
 
-    # bind solo Return (enter). NO bind FocusOut.
     entrada.bind("<Return>", procesar_tarjeta)
 
-# ----------------- IMPRIMIR (lee DB y genera pdf) -----------------
+# ----------------- IMPRIMIR (ticket) -----------------
 def generar_e_imprimir_pdf_desde_fila(fila):
-    """
-    fila: (id, nombre_lote, materia_prima, peso_bruto, tara, peso_neto, tipo_movimiento, pesado_en, usuario_validador, usuario_pesador, timestamp)
-    """
     try:
         (lote_id, nombre_lote, materia_prima, bruto, tara, neto, tipo_mov, pesado_en, usuario_validador, usuario_pesador, timestamp) = fila
 
-        # preparar carpeta tickets
         os.makedirs("tickets", exist_ok=True)
         ahora = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = str(nombre_lote).replace(" ", "_")
+        safe_name = str(nombre_lote).replace(" ", "_").replace("/", "_")
         filename = f"ticket_{lote_id}_{safe_name}_{ahora}.pdf"
-        pdf_path = os.path.join("tickets", filename)
+        pdf_path = os.path.join(os.getcwd(), "tickets", filename)
 
-        # tamaño similar al original
         ticket_w = 100 * mm
         ticket_h = 230 * mm
         c = canvas.Canvas(pdf_path, pagesize=(ticket_w, ticket_h))
 
-        # logo centrado
         try:
             logo_w = 40 * mm
             logo_h = 15 * mm
@@ -328,7 +319,6 @@ def generar_e_imprimir_pdf_desde_fila(fila):
             logo_y = ticket_h - logo_h - 10
             c.drawImage(LOGO_PATH, logo_x, logo_y, width=logo_w, height=logo_h, preserveAspectRatio=True)
         except Exception:
-            # si falla logo, seguir
             logo_y = ticket_h - 10
 
         y = logo_y - 20
@@ -337,75 +327,47 @@ def generar_e_imprimir_pdf_desde_fila(fila):
         y -= 30
 
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, f"ID Lote: {lote_id}")
-        y -= 20
-        c.drawString(18, y, "Tipo Movimiento:")
-        y -= 20
+        c.drawString(18, y, f"ID Lote: {lote_id}"); y -= 20
+        c.drawString(18, y, "Tipo Movimiento:"); y -= 20
         c.setFont("Helvetica", 16)
-        c.drawString(14, y, str(tipo_mov))
-        y -= 25
-
+        c.drawString(14, y, str(tipo_mov)); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Fecha y Hora:")
-        y -= 20
+        c.drawString(18, y, "Fecha y Hora:"); y -= 20
         c.setFont("Helvetica", 16)
         fecha_str = str(timestamp) if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.drawString(14, y, fecha_str)
-        y -= 25
-
+        c.drawString(14, y, fecha_str); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Proveedor:")
-        y -= 20
+        c.drawString(18, y, "Proveedor:"); y -= 20
         c.setFont("Helvetica", 16)
-        c.drawString(14, y, str(nombre_lote))
-        y -= 25
-
+        c.drawString(14, y, str(nombre_lote)); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Materia Prima:")
-        y -= 20
+        c.drawString(18, y, "Materia Prima:"); y -= 20
         c.setFont("Helvetica", 16)
-        c.drawString(14, y, str(materia_prima))
-        y -= 25
-
+        c.drawString(14, y, str(materia_prima)); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Pesado en:")
-        y -= 20
+        c.drawString(18, y, "Pesado en:"); y -= 20
         c.setFont("Helvetica", 16)
-        c.drawString(14, y, str(pesado_en))
-        y -= 30
-
+        c.drawString(14, y, str(pesado_en)); y -= 30
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Subtotal (Bruto):")
-        y -= 20
+        c.drawString(18, y, "Subtotal (Bruto):"); y -= 20
         c.setFont("Helvetica-Bold", 16)
-        c.drawString(20, y, f"{(bruto or 0):.2f} kg")
-        y -= 25
-
+        c.drawString(20, y, f"{(bruto or 0):.2f} kg"); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Tara:")
-        y -= 20
+        c.drawString(18, y, "Tara:"); y -= 20
         c.setFont("Helvetica-Bold", 16)
-        c.drawString(20, y, f"{(tara or 0):.2f} kg")
-        y -= 25
-
+        c.drawString(20, y, f"{(tara or 0):.2f} kg"); y -= 25
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, "Peso Neto:")
-        y -= 20
+        c.drawString(18, y, "Peso Neto:"); y -= 20
         c.setFont("Helvetica-Bold", 20)
-        c.drawString(20, y, f"{(neto or 0):.2f} kg")
-        y -= 40
-
+        c.drawString(20, y, f"{(neto or 0):.2f} kg"); y -= 40
         c.setFont("Helvetica", 14)
-        c.drawString(18, y, f"Pesador: {usuario_pesador or ''}")
-        y -= 18
-        c.drawString(18, y, f"Validador: {usuario_validador or ''}")
+        c.drawString(18, y, f"Pesador: {usuario_pesador or ''}"); y -= 18
 
         c.showPage()
         c.save()
 
-        messagebox.showinfo("OK", f"PDF generado: {pdf_path}")
+        messagebox.showinfo("Información", f"Ticket guardado correctamente: {pdf_path}")
 
-        # intentar imprimir en Windows si win32api disponible
         if platform.system() == "Windows" and win32api is not None:
             try:
                 win32api.ShellExecute(0, "print", pdf_path, f'"{PRINTER_NAME}"', ".", 0)
@@ -422,7 +384,152 @@ def limpiar_formulario():
     materia_combobox.set("...")
     pesado_en_combobox.set("...")
     tipo_mov_var.set("ENTRADA")
-    # no tocar la BD ni el consecutivo
+
+# ----------------- REPORTE DIARIO (sin impresión) -----------------
+def imprimir_reporte_diario(usuario):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+        fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+        inicio_dia = f"{fecha_hoy} 00:00:00"
+        fin_dia = f"{fecha_hoy} 23:59:59"
+
+        cursor.execute("""
+            SELECT id, nombre_lote, materia_prima, pesado_en, tara, peso_neto
+            FROM lotes
+            WHERE usuario_pesador = ? AND timestamp BETWEEN ? AND ?
+            ORDER BY id ASC
+        """, (usuario, inicio_dia, fin_dia))
+
+        registros = cursor.fetchall()
+        conn.close()
+
+        if not registros:
+            messagebox.showinfo("Información", f"No hay registros de hoy para {usuario}.")
+            return
+
+        total_pesajes = len(registros)
+        peso_total = sum(r[5] for r in registros if r[5] is not None)
+
+        os.makedirs("reportes", exist_ok=True)
+        ahora = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_path = os.path.join("reportes", f"reporte_{usuario}_{ahora}.pdf")
+
+        from reportlab.lib.pagesizes import LETTER
+        c = canvas.Canvas(pdf_path, pagesize=LETTER)
+        width, height = LETTER
+
+        # Márgenes
+        margen_izq = 40
+        margen_der = width - 40
+        y_inicio = height - 80
+
+        # Logo
+        try:
+            logo_w = 80
+            logo_h = 40
+            c.drawImage(LOGO_PATH, (width - logo_w)/2, y_inicio, width=logo_w, height=logo_h, preserveAspectRatio=True)
+        except Exception:
+            pass
+
+        y = y_inicio - 60
+        c.setFont("Helvetica-Bold", 18)
+        c.drawCentredString(width/2, y, f"Reporte Diario de Pesajes - {usuario}")
+        y -= 30
+        c.setFont("Helvetica", 12)
+        c.drawCentredString(width/2, y, f"Fecha: {fecha_hoy}")
+        y -= 40
+
+        # Ancho de columnas relativo a los márgenes
+        columnas = {
+            "ID": 0.05,
+            "Proveedor": 0.25,
+            "Materia Prima": 0.25,
+            "Pesado en": 0.2,
+            "Tara": 0.125,
+            "Peso Neto": 0.125
+        }
+
+        # Posición de cada columna
+        x_positions = {}
+        x = margen_izq
+        for col, propor in columnas.items():
+            x_positions[col] = x
+            x += (margen_der - margen_izq) * propor
+
+        # Cabecera
+        c.setFont("Helvetica-Bold", 12)
+        for col in columnas.keys():
+            if col in ["Tara", "Peso Neto"]:
+                c.drawRightString(x_positions[col] + (margen_der - margen_izq)*columnas[col] - 2, y, col)
+            else:
+                c.drawString(x_positions[col], y, col)
+        y -= 20
+        c.line(margen_izq, y, margen_der, y)
+        y -= 15
+
+        # Filas
+        c.setFont("Helvetica", 11)
+        for (id_lote, proveedor, materia_prima, pesado_en, tara, peso_neto) in registros:
+            if y < 80:
+                c.showPage()
+                c.setFont("Helvetica", 11)
+                y = height - 80
+
+            c.drawString(x_positions["ID"], y, str(id_lote))
+            c.drawString(x_positions["Proveedor"], y, proveedor if proveedor else "—")
+            c.drawString(x_positions["Materia Prima"], y, materia_prima if materia_prima else "—")
+            c.drawString(x_positions["Pesado en"], y, pesado_en if pesado_en else "—")
+            c.drawRightString(x_positions["Tara"] + (margen_der - margen_izq)*columnas["Tara"] - 2, y, f"{tara:.2f}" if tara else "0.00")
+            c.drawRightString(x_positions["Peso Neto"] + (margen_der - margen_izq)*columnas["Peso Neto"] - 2, y, f"{peso_neto:.2f}" if peso_neto else "0.00")
+            y -= 20
+
+        # Línea final
+        y -= 10
+        c.line(margen_izq, y, margen_der, y)
+        y -= 30
+
+        # Resumen
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(margen_izq, y, f"🧾 Total de pesajes: {total_pesajes}")
+        y -= 20
+        c.drawString(margen_izq, y, f"⚖️ Peso neto acumulado: {peso_total:.2f} kg")
+
+        c.save()
+
+        messagebox.showinfo("Información", f"Reporte generado correctamente: {pdf_path}")
+
+    except Exception as e:
+        messagebox.showerror("Error", f"Error generando el reporte: {e}")
+
+# ----------------- VENTANA REPORTE -----------------
+def abrir_ventana_reporte():
+    ventana_reporte = tk.Toplevel(app)
+    ventana_reporte.title("Imprimir Reporte Diario")
+    ventana_reporte.geometry("500x300")
+    ventana_reporte.configure(bg="#f7f7f7")
+
+    tk.Label(ventana_reporte, text="Selecciona el usuario:", font=("Arial", 16), bg="#f7f7f7").pack(pady=15)
+    usuarios = obtener_usuarios_activos()
+    if not usuarios:
+        usuarios = ["(No hay usuarios activos)"]
+
+    usuario_combobox = ttk.Combobox(ventana_reporte, font=("Arial", 14), values=usuarios, state="readonly", width=30)
+    usuario_combobox.pack(pady=10)
+    if usuarios:
+        usuario_combobox.set(usuarios[0])
+
+    def confirmar_reporte():
+        usuario = usuario_combobox.get()
+        if usuario in ("", "(No hay usuarios activos)"):
+            messagebox.showerror("Error", "Selecciona un usuario válido.")
+            return
+        imprimir_reporte_diario(usuario)
+        ventana_reporte.destroy()
+
+    tk.Button(ventana_reporte, text="Generar Reporte", bg="#004080", fg="white",
+              font=("Arial", 14, "bold"), command=confirmar_reporte).pack(pady=25)
 
 # ----------------- INTERFAZ -----------------
 init_db()
@@ -475,11 +582,12 @@ pesado_en_combobox.set("...")
 validar_tarjeta_btn = tk.Button(app, text="Imprimir con Tarjeta", bg="#800000", fg="white", command=abrir_ventana_tara, font=("Arial", 16, "bold"))
 validar_tarjeta_btn.pack(pady=20)
 
-# indicador de estabilidad peso
+reporte_btn = tk.Button(app, text="📄 Generar Reporte Diario", bg="#004080", fg="white", font=("Arial", 16, "bold"), command=abrir_ventana_reporte)
+reporte_btn.pack(pady=10)
+
 mensaje_label = tk.Label(app, text="", font=("Arial", 14), fg="green", bg="#ffffff")
 mensaje_label.pack(pady=10)
 
-# iniciar hilo de lectura simulada de peso
 t = threading.Thread(target=leer_peso_simulado, daemon=True)
 t.start()
 procesar_peso_desde_cola()
